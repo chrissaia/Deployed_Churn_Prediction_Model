@@ -33,7 +33,6 @@ gradio
 graphene==3.4.3
 graphql-core==3.2.6
 graphql-relay==3.2.0
-great_expectations==1.5.8
 gunicorn==22.0.0
 h11==0.16.0
 idna==3.10
