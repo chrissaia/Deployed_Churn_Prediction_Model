@@ -6,7 +6,8 @@ WORKDIR /src/app/
 COPY requirements.txt ./
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
-    && pip apt-get clean && rm -rf /var/lib/apt/lists/*
+    && pip apt-get clean && rm -rf /var/lib/apt/lists/* \
+
 
 # tells the builder to copy all files from the host and put them into the container imagw
 COPY . .
