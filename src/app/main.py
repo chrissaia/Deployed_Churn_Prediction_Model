@@ -187,16 +187,6 @@ demo = gr.Interface(
     historical telecom customer data to identify customers at risk of churning.
     
     """,
-    examples=[
-        # High churn risk example
-        ["Female", "No", "No", "Yes", "No", "Fiber optic", "No", "No", "No",
-         "No", "Yes", "Yes", "Month-to-month", "Yes", "Electronic check",
-         1, 85.0, 85.0],
-        # Low churn risk example
-        ["Male", "Yes", "Yes", "Yes", "Yes", "DSL", "Yes", "Yes", "Yes",
-         "Yes", "No", "No", "Two year", "No", "Credit card (automatic)",
-         60, 45.0, 2700.0]
-    ],
     theme=gr.themes.Soft(),  # looks professional
     allow_flagging="never"
 )
@@ -208,3 +198,18 @@ app = gr.mount_gradio_app(
     demo,  # Gradio interface
     path="/ui"  # URL path where Gradio will be accessible
 )
+
+
+
+'''
+examples = [
+    # High churn risk example
+    ["Female", "No", "No", "Yes", "No", "Fiber optic", "No", "No", "No",
+     "No", "Yes", "Yes", "Month-to-month", "Yes", "Electronic check",
+     1, 85.0, 85.0],
+    # Low churn risk example
+    ["Male", "Yes", "Yes", "Yes", "Yes", "DSL", "Yes", "Yes", "Yes",
+     "Yes", "No", "No", "Two year", "No", "Credit card (automatic)",
+     60, 45.0, 2700.0]
+],
+'''
