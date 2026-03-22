@@ -23,7 +23,8 @@ COPY src/serving/model/m-287af1f0418a4910a8c9fb9fb678b2c4/artifacts/preprocessin
 
 # l
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/src
+    PYTHONPATH=/app/src \
+    MPLCONFIGDIR=/tmp/matplotlib
 
 # sets configuration on the image that indicates a port the image would like to expose.
 EXPOSE 8080

@@ -9,8 +9,8 @@ import json
 
 
 def load_feature_columns():
-    with open("artifacts/feature_columns.txt") as f:
-        return [line.strip() for line in f if line.strip()]
+    with open("artifacts/feature_columns.json") as f:
+        return json.load(f)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
