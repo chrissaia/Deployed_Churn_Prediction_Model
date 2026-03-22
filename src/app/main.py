@@ -9,7 +9,7 @@ import json
 
 
 def load_feature_columns():
-    with open("artifacts/feature_columns.json") as f:
+    with open("artifacts/feature_columns.txt") as f:
         return [line.strip() for line in f if line.strip()]
 
 @asynccontextmanager
@@ -197,7 +197,8 @@ demo = gr.Interface(
          "Yes", "No", "No", "Two year", "No", "Credit card (automatic)",
          60, 45.0, 2700.0]
     ],
-    theme=gr.themes.Soft()  # looks professional
+    theme=gr.themes.Soft(),  # looks professional
+    allow_flagging="never"
 )
 
 # Mounting gradio onto fastapi
