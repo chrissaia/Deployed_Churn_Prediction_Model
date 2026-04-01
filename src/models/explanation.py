@@ -2,7 +2,7 @@ from litellm import completion
 import os
 
 
-def explain(input_dict, proba, preds):
+def explain(input_dict, feature_importance, proba, preds):
     '''
 
     :param input_dict: The input dictionary containing the un-preprocessed data
@@ -16,9 +16,12 @@ def explain(input_dict, proba, preds):
 
         Customer data:
         {input_dict}
+        
+        Top model features:
+        {feature_importance}
 
         Model output:
-        - Churn probability: {float(proba[:, 1][0]):.3f}
+        - Churn probability: {proba}
         - Prediction: {"Likely to churn" if preds[0] == 1 else "Not likely to churn"}
 
         IMPORTANT:
@@ -34,11 +37,10 @@ def explain(input_dict, proba, preds):
 
     response = completion(
         model="gpt-4o",
-        api_key=os.getenv("API_KEY"),
+        api_key=os.getenv("LITELLM_MASTER_KEY"),
         messages=[{"role": "user", "content": prompt}]
     )
 
     explanation = response["choices"][0]["message"]["content"]
-    print(explanation)
 
     return explanation

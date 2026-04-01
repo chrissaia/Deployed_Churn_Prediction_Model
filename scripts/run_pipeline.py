@@ -32,6 +32,7 @@ except ImportError:
 
 from src.models.train import train_model
 from src.models.tune import tune_model
+from src.models.explanation import explain
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -122,24 +123,25 @@ def run(args: argparse.Namespace) -> None:
             mlflow.log_text(json.dumps(failed, indent=2), artifact_file="failed_expectations.json")
             raise ValueError(f"Data quality check failed: {failed}")
 
+
         # --- Preprocess ---
         log.info("Preprocessing...")
-        df = preprocess_data(df)
+        df_processed = preprocess_data(df)
 
         if args.save_processed:
             processed_dir = PROJECT_ROOT / "data" / "processed"
             ensure_dir(processed_dir)
             processed_path = processed_dir / "telco_churn_processed.csv"
-            df.to_csv(processed_path, index=False)
+            df_processed.to_csv(processed_path, index=False)
             mlflow.log_artifact(str(processed_path), artifact_path="data")
             log.info("Saved processed dataset: %s", processed_path)
 
         # --- Feature engineering ---
-        if args.target not in df.columns:
+        if args.target not in df_processed.columns:
             raise ValueError(f"Target column '{args.target}' not found.")
 
         log.info("Building features...")
-        df_fe = build_features(df, target_col=args.target)
+        df_fe = build_features(df_processed, target_col=args.target)
 
         # booleans -> int
         bool_cols = df_fe.select_dtypes(include=["bool"]).columns.tolist()
@@ -182,6 +184,10 @@ def run(args: argparse.Namespace) -> None:
             mlflow.log_param("scale_pos_weight", params["scale_pos_weight"])
             mlflow.log_param("pos_count", pos)
             mlflow.log_param("neg_count", neg)
+
+
+
+
 
         # --- OPTIONAL: Hyperparameter tuning (Optuna) ---
         if args.tune:
@@ -241,8 +247,29 @@ def run(args: argparse.Namespace) -> None:
 
         log.info("Done.")
 
-    if args.past_models:
-        get_mlrrun_metrics.get_mlrrun_metrics()
+        # --- OPTIONAL: llm explanation ---
+        if args.explain:
+            # pick a single example (first row for now)
+            row = df.iloc[0].to_dict()
+            feature_importance = dict(
+                sorted(
+                    zip(df_fe.drop(columns=[args.target]).columns, model.feature_importances_),
+                    key=lambda x: x[1],
+                    reverse=True
+                )[:5]
+            )
+
+            explanation = explain(row, feature_importance, proba, preds)
+
+
+            print(explanation)
+            mlflow.log_text(json.dumps(explanation, indent=2), artifact_file="llm_explanation.json")
+
+
+        if args.past_models:
+            get_mlrrun_metrics.get_mlrrun_metrics()
+
+
 
 
 
@@ -266,6 +293,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42, help="Random seed for tuning model")
     p.add_argument("--tune_trials", type=int, default=30, help="Number of Optuna trials")
     p.add_argument("--tune_cv_splits", type=int, default=3, help="CV folds for Optuna tuning")
+    p.add_argument("--explain", action="store_true", default=False, help="Whether to call ChatGPT to explain")
 
     return p.parse_args()
 

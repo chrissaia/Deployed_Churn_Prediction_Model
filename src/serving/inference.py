@@ -27,6 +27,9 @@ Production Deployment:
 import os
 import pandas as pd
 import mlflow
+from opentelemetry import trace
+from opentelemetry.trace import Status, StatusCode
+from litellm import completion
 
 
 # -----------------------------------------------------
@@ -39,6 +42,9 @@ import mlflow
 # -----------------------------------------------------
 
 MODEL_DIR = "/app/model"
+
+# Initializes an OpenTelemetry tracer instance, allowing Python code to create manual spans for distributed tracing.
+tracer = trace.get_tracer(__name__)
 
 try:
     # Load the trained XGBoost model in MLflow pyfunc format
@@ -168,8 +174,173 @@ def _serve_transform(df: pd.DataFrame) -> pd.DataFrame:
 
     return df
 
+def _get_top_features(df_enc: pd.DataFrame, top_n: int = 5) -> list[dict]:
+    """
+    Build a compact top-features payload for the LLM.
 
-def predict(input_dict: dict) -> str:
+    Strategy:
+    - If model feature importances are available, rank active row features
+      by their global importance.
+    - Otherwise, fall back to active non-zero features from the row.
+
+    Returns:
+        [
+          {"feature": "MonthlyCharges", "value": 85.5, "importance": 0.12},
+          ...
+        ]
+    """
+
+    # -----------------------------------------------------
+    # STEP 1: Extract the single row used for prediction
+    # This assumes df_enc contains exactly one row
+    # -----------------------------------------------------
+    row = df_enc.iloc[0]
+
+    # -----------------------------------------------------
+    # STEP 2: Attempt to locate the underlying trained model
+    # -----------------------------------------------------
+    try:
+        underlying_model = model._model_impl.python_model.model
+        importances = underlying_model.feature_importances_
+    except Exception:
+        importances = None
+
+    # -----------------------------------------------------
+    # STEP 3: Identify active features (non-zero values)
+    # These are the only features relevant for THIS prediction
+    # -----------------------------------------------------
+    active_features = []
+    for feature_name, value in row.items():
+        if value != 0:
+            active_features.append((feature_name, value))
+
+    # -----------------------------------------------------
+    # STEP 4: If feature importances exist, rank features
+    # by importance to provide stronger signal to the LLM
+    # -----------------------------------------------------
+    if importances is not None and len(importances) == len(df_enc.columns):
+        ranked = []
+
+        for idx, (feature_name, value) in enumerate(active_features):
+            ranked.append(
+                {
+                    "feature": feature_name,
+                    # Convert numpy types to native Python types
+                    "value": value.item() if hasattr(value, "item") else value,
+                    "importance": float(importances[idx]),
+                }
+            )
+
+        # Sort descending by importance (highest impact first)
+        ranked.sort(key=lambda x: x["importance"], reverse=True)
+
+        return ranked[:top_n]
+
+    # -----------------------------------------------------
+    # STEP 5: Fallback behavior (no feature importances)
+    # Still return meaningful context using active features
+    # -----------------------------------------------------
+    return [
+        {
+            "feature": feature_name,
+            "value": value.item() if hasattr(value, "item") else value,
+        }
+        for feature_name, value in active_features[:top_n]
+    ]
+
+def _llm_prediction_explanation(input_dict, proba, label, top_features):
+    """
+    Generate a natural-language explanation of the model prediction using an LLM.
+
+    PURPOSE:
+    This function translates raw model outputs into a human-readable explanation
+    for business users. It does NOT change the prediction — it only explains it.
+
+    DESIGN PRINCIPLES:
+    - Ground explanation ONLY in provided input data
+    - Never contradict the model prediction (result is source of truth)
+    - Keep output concise and business-friendly
+    - Avoid hallucinating features not present in input_dict
+
+    INPUTS:
+    - input_dict: dict
+        Raw customer input data BEFORE feature engineering
+        (human-readable fields like Contract, MonthlyCharges, etc.)
+
+    - proba: list or float
+        Model predicted probabilities (typically [[p_no_churn, p_churn]])
+        Used to communicate confidence level
+
+    - preds: list or int
+        Raw model prediction output (usually [0] or [1])
+
+    - result: int
+        Final normalized prediction (0 or 1)
+        Used to determine business label
+
+    OUTPUT:
+    - explanation: str
+        Concise explanation (3–5 bullets + short summary)
+    """
+
+    # === Normalize probability for readability ===
+    # Extract churn probability from model output
+    try:
+        churn_prob = proba[0][1] if isinstance(proba[0], (list, tuple)) else proba
+    except Exception:
+        churn_prob = proba  # fallback if already scalar
+
+    # -----------------------------------------------------
+    # Prompt construction
+    # IMPORTANT:
+    # - We explicitly anchor the model output
+    # - We prevent hallucination
+    # - We guide structure tightly
+    # -----------------------------------------------------
+    prompt = f"""
+        You are an expert churn analyst explaining a machine learning prediction.
+        
+        Customer data (raw input features):
+        {input_dict}
+        
+        Top features:
+        {top_features}
+        
+        Model output:
+        - Churn probability: {round(churn_prob, 4)}
+        - Prediction: {label}
+        
+        STRICT RULES:
+        - The prediction is CORRECT. Do not contradict it.
+        - Only reference fields explicitly present in the customer data.
+        - Do NOT invent features or assumptions.
+        - Keep explanations grounded in realistic business reasoning.
+        
+        TASK:
+        1. Provide 3-5 concise bullet points explaining the main drivers of this prediction.
+        2. Focus on how the customer's attributes relate to churn risk.
+        3. End with a 1-2 sentence business-friendly summary.
+        
+        OUTPUT FORMAT:
+        - Bullet points
+        - Then a short summary paragraph
+        """
+
+    # === Call LiteLLM (via proxy) ===
+    # Uses LITELLM_MASTER_KEY for authentication
+    response = completion(
+        model="gpt-4o",
+        api_key=os.getenv("LITELLM_MASTER_KEY"),
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    # Extract response safely
+    explanation = response["choices"][0]["message"]["content"]
+
+    return explanation
+
+
+def predict(input_dict: dict) -> (str, str):
     """
     Main prediction function for customer churn inference.
 
@@ -201,36 +372,87 @@ def predict(input_dict: dict) -> str:
         "Likely to churn"
     """
 
-    # === STEP 1: Convert Input to DataFrame ===
-    # Create single-row DataFrame for pandas transformations
-    df = pd.DataFrame([input_dict])
+    with tracer.start_as_current_span("churn_prediction") as root_span:
+        try:
+            # === Attach Business Attributes ===
+            root_span.set_attribute("customer.gender", input_dict.get("gender"))
+            root_span.set_attribute("customer.partner", input_dict.get("Partner"))
+            root_span.set_attribute("customer.dependents", input_dict.get("Dependents"))
+            root_span.set_attribute("customer.tenure", int(input_dict.get("tenure", 0)))
+            root_span.set_attribute("customer.monthly_charges", float(input_dict.get("MonthlyCharges", 0)))
+            root_span.set_attribute("customer.total_charges", float(input_dict.get("TotalCharges", 0)))
+            root_span.set_attribute("customer.contract", input_dict.get("Contract"))
 
-    # === STEP 2: Apply Feature Transformations ===
-    # Use the same transformation pipeline as training
-    df_enc = _serve_transform(df)
 
-    # === STEP 3: Generate Model Prediction ===
-    # Call the loaded MLflow model for inference
-    # The model returns predictions in various formats depending on the ML library
-    try:
-        preds = model.predict(df_enc)
+            # === STEP 1: Convert Input to DataFrame ===
+            # Create single-row DataFrame for pandas transformations
+            with tracer.start_as_current_span("dataframe_creation"):
+                df = pd.DataFrame([input_dict])
 
-        # Normalize prediction output to consistent format
-        if hasattr(preds, "tolist"):
-            preds = preds.tolist()  # Convert numpy array to list
+            # === STEP 2: Apply Feature Transformations ===
+            # Start a span to track this specific function
+            with tracer.start_as_current_span("feature_transform"):
+                df_enc = _serve_transform(df)
+                root_span.set_attribute("feature.count", len(df_enc.columns))
 
-        # Extract single prediction value (for single-row input)
-        if isinstance(preds, (list, tuple)) and len(preds) == 1:
-            result = preds[0]
-        else:
-            result = preds
+            # === STEP 3: Generate Model Prediction ===
+            # Call the loaded MLflow model for inference
+            # The model returns predictions in various formats depending on the ML library
+            # Start a span to track this specific function
+            with tracer.start_as_current_span("model_inference") as model_span:
+                preds = model.predict(df_enc)
+                proba = model.predict_proba(df_enc)
 
-    except Exception as e:
-        raise Exception(f"Model prediction failed: {e}")
+                # Normalize prediction output to consistent format
+                if hasattr(preds, "tolist"):
+                    preds = preds.tolist()  # Convert numpy array to list
 
-    # === STEP 4: Convert to Business-Friendly Output ===
-    # Convert binary prediction (0/1) to actionable business language
-    if result == 1:
-        return "Likely to churn"  # High risk - needs intervention
-    else:
-        return "Not likely to churn"  # Low risk - maintain normal service
+                if hasattr(proba, "tolist"):
+                    proba = proba.tolist()  # Convert numpy array to list
+
+                # Extract single prediction value (for single-row input)
+                if isinstance(preds, (list, tuple)) and len(preds) == 1:
+                    result = preds[0]
+                else:
+                    result = preds
+
+                # span the raw prediction
+                model_span.set_attribute("raw_prediction", int(result))
+
+
+            # === STEP 4: Convert to Business-Friendly Output ===
+            # Convert binary prediction (0/1) to actionable business language
+            if result == 1:
+                label = "Likely to churn"  # High risk - needs intervention
+            else:
+                label = "Not likely to churn"  # Low risk - maintain normal service
+
+            # raw churn prediction and label
+            root_span.set_attribute("churn.prediction", int(result))
+            root_span.set_attribute("churn.label", label)
+            root_span.set_status(Status(StatusCode.OK))
+
+            # === STEP 5: Build grounded context for the LLM explanation. ===
+            # These are the most relevant transformed features for this row.
+            # If model importances are unavailable, this falls back to active features.
+            top_features = _get_top_features(df_enc, top_n=5)
+            root_span.set_attribute("llm.top_features_count", len(top_features))
+
+            # === STEP 6: Use LLM to curate an explanation ===
+            # The LLM explains the prediction, but does not decide it.
+            explanation = _llm_prediction_explanation(
+                    input_dict=input_dict,
+                    proba=proba,
+                    label=label,
+                    top_features=top_features,
+                )
+
+            # === STEP 7: Mark the overall prediction workflow as successful ===
+            # and return both the business label and the explanation.
+            root_span.set_status(Status(StatusCode.OK))
+            return label, explanation
+
+        except Exception as e:
+            root_span.record_exception(e)
+            root_span.set_status(Status(StatusCode.ERROR))
+            raise

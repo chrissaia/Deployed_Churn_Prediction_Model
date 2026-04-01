@@ -95,11 +95,12 @@ def get_prediction(data: ChurnData):
     try:
         # Convert Pydantic model to dict and call inference pipeline
         with tracer.start_as_current_span("ml_inference"):
-            result = predict(data.model_dump())
-        return {"prediction": result}
+            result, explanation = predict(data.model_dump())
+        return {"prediction": result, "llm_call_explanation": explanation}
     except Exception as e:
         # Return error details for debugging (consider logging in production)
         return {"error": str(e)}
+
 
 
 # ---------------------------------------------------
@@ -143,8 +144,8 @@ def gradio_interface(
     }
 
     # Call same inference pipeline as API endpoint
-    result = predict(data)
-    return str(result)  # Return as string for Gradio display
+    result, explanation = predict(data)
+    return str(result), str(explanation)  # Return as string for Gradio display
 
 
 # build comprehensive Gradio interface with all customer features
@@ -182,7 +183,10 @@ demo = gr.Interface(
         gr.Number(label="Monthly Charges ($)", value=85.0, minimum=0, maximum=200),
         gr.Number(label="Total Charges ($)", value=85.0, minimum=0, maximum=10000),
     ],
-    outputs=gr.Textbox(label="Churn Prediction", lines=2),
+    outputs=[
+        gr.Textbox(label="Churn Prediction", lines=2),
+        gr.Textbox(label="LLM Explanation", lines=30)
+    ],
     title="Telco Customer Churn Predictor",
     description="""
     **Predict customer churn probability**

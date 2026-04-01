@@ -7,6 +7,7 @@ import pandas as pd
 from xgboost import XGBClassifier
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.metrics import recall_score
+from litellm import completion
 
 print("=== Phase 2: Modeling with XGBoost (Optuna + StratifiedKFold) ===")
 
@@ -126,3 +127,4 @@ print("Test Recall:", test_recall)
 
 # Set a reasonable floor
 assert test_recall >= 0.50, f"Test recall too low: {test_recall:.3f}"
+
