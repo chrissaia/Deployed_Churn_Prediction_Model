@@ -1,11 +1,11 @@
 from fastapi import FastAPI
 from pydantic import RootModel, BaseModel
 from contextlib import asynccontextmanager
+from src.observability.tracing import setup_tracing
 import gradio as gr
 
 from src.serving.inference import predict
 import json
-
 
 
 def load_feature_columns():
@@ -24,6 +24,9 @@ app = FastAPI(
     version="0.0.1",
     lifespan=lifespan,
 )
+
+tracer = setup_tracing(app)
+
 
 
 # check root health - Required for AWS
@@ -91,7 +94,8 @@ def get_prediction(data: ChurnData):
     """
     try:
         # Convert Pydantic model to dict and call inference pipeline
-        result = predict(data.model_dump())
+        with tracer.start_as_current_span("ml_inference"):
+            result = predict(data.model_dump())
         return {"prediction": result}
     except Exception as e:
         # Return error details for debugging (consider logging in production)
