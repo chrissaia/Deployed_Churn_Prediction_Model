@@ -52,6 +52,7 @@ jupyter_client==8.6.3
 jupyter_core==5.8.1
 kiwisolver==1.4.8
 lightgbm==4.6.0
+litellm
 Mako==1.3.10
 Markdown==3.8.2
 MarkupSafe==3.0.2

@@ -3,8 +3,10 @@ from pydantic import RootModel, BaseModel
 from contextlib import asynccontextmanager
 from src.observability.tracing import setup_tracing
 import gradio as gr
+import litellm
 
-from src.serving.inference import predict
+
+from src.serving.inference import predict, llm_prediction_explanation
 import json
 
 
@@ -15,6 +17,7 @@ def load_feature_columns():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.feature_columns = load_feature_columns()
+    litellm.callbacks = ["langfuse_otel"]
     yield
     app.state.clear()
 
@@ -25,7 +28,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-tracer = setup_tracing(app)
+tracer = None
 
 
 
@@ -80,10 +83,19 @@ class ChurnData(BaseModel):
     MonthlyCharges: float  # Monthly charges in dollars
     TotalCharges: float  # Total charges to date
 
+class llm_vars(BaseModel):
+    """
+    llm call variables needed to execute call.
+    """
+    input_data: dict
+    proba: list
+    result: str
+    top_features: list[dict]
+
 
 
 @app.post("/predict")
-def get_prediction(data: ChurnData):
+def get_prediction(data: ChurnData, llm_data: llm_vars):
     """
     Main prediction endpoint for customer churn prediction.
 
@@ -94,9 +106,33 @@ def get_prediction(data: ChurnData):
     """
     try:
         # Convert Pydantic model to dict and call inference pipeline
-        with tracer.start_as_current_span("ml_inference"):
-            result, explanation = predict(data.model_dump())
-        return {"prediction": result, "llm_call_explanation": explanation}
+        result, vars = predict(data.model_dump())
+
+        llm_data.input_data = vars[0]
+        llm_data.proba = vars[1]
+        llm_data.result = result
+        llm_data.top_features = vars[2]
+
+        return {"prediction": result}
+    except Exception as e:
+        # Return error details for debugging (consider logging in production)
+        return {"error": str(e)}
+
+
+@app.post("/explanation")
+def get_explanation(data: llm_vars):
+    """
+    Main llm call endpoint for customer explanation.
+
+    Receives prediction data from /predict endpoint
+    Calls the inference pipeline to get explanation
+    Returns explanation as a string
+
+    """
+    try:
+        # call inference explanation function
+        explanation = llm_prediction_explanation(data.input_data, data.proba, data.result, data.top_features)
+        return {"llm_call_explanation": explanation}
     except Exception as e:
         # Return error details for debugging (consider logging in production)
         return {"error": str(e)}
@@ -144,7 +180,8 @@ def gradio_interface(
     }
 
     # Call same inference pipeline as API endpoint
-    result, explanation = predict(data)
+    result, vars = predict(data)
+    explanation = llm_prediction_explanation(vars[0], vars[1], result, vars[2])
     return str(result), str(explanation)  # Return as string for Gradio display
 
 

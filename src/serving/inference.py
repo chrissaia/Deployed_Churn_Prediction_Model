@@ -30,6 +30,7 @@ import mlflow
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from litellm import completion
+import json
 
 
 # -----------------------------------------------------
@@ -45,11 +46,12 @@ MODEL_DIR = "/app/model"
 
 # Initializes an OpenTelemetry tracer instance, allowing Python code to create manual spans for distributed tracing.
 tracer = trace.get_tracer(__name__)
+local = False
 
 try:
     # Load the trained XGBoost model in MLflow pyfunc format
     # This ensures compatibility regardless of the underlying ML library
-    model = mlflow.pyfunc.load_model(MODEL_DIR)
+    model = mlflow.sklearn.load_model(MODEL_DIR)
     print(f"Model loaded successfully from {MODEL_DIR}")
 except Exception as e:
     print(f"Failed to load model from {MODEL_DIR}: {e}")
@@ -60,10 +62,21 @@ except Exception as e:
 
         local_model_paths = glob.glob("./mlruns/*/*/artifacts/model")
         if local_model_paths:
-            latest_model = max(local_model_paths, key=os.path.getmtime)
-            model = mlflow.pyfunc.load_model(latest_model)
-            MODEL_DIR = latest_model
-            print(f"Fallback: Loaded model from {latest_model}")
+            local = True
+            for local_model_path in local_model_paths:
+                latest_model = max(local_model_paths, key=os.path.getmtime)
+                try:
+                    model = mlflow.sklearn.load_model(latest_model)
+                except Exception as e:
+                    local_model_paths.remove(latest_model)
+                    continue
+
+                MODEL_DIR = latest_model
+                print(f"Fallback: Loaded model from {latest_model}")
+
+                MODEL_DIR = os.path.join(MODEL_DIR, "..", "artifacts")
+
+
         else:
             raise Exception("No model found in local mlruns")
     except Exception as fallback_error:
@@ -75,13 +88,18 @@ except Exception as e:
 # -----------------------------------------------------
 
 try:
-    feature_file = os.path.join(MODEL_DIR, "feature_columns.txt")
-    with open(feature_file) as f:
-        FEATURE_COLS = [ln.strip() for ln in f if ln.strip()]
-    print(f"Loaded {len(FEATURE_COLS)} feature columns from training")
+    if not local:
+        feature_file = os.path.join(MODEL_DIR, "feature_columns.txt")
+        with open(feature_file) as f:
+            FEATURE_COLS = [ln.strip() for ln in f if ln.strip()]
+        print(f"Loaded {len(FEATURE_COLS)} feature columns from serving")
+    else:
+        feature_file = os.path.join(MODEL_DIR, "feature_columns.json")
+        with open(feature_file) as f:
+            FEATURE_COLS = json.load(f)
+        print(f"Loaded {len(FEATURE_COLS)} feature columns from training")
 except Exception as e:
-    raise Exception(f"Failed to load feature columns: {e}")
-
+    raise Exception(f"Failed to load model from {MODEL_DIR}: {e}")
 
 # -----------------------------------------------------
 # These mappings must exactly match those used in training
@@ -200,8 +218,7 @@ def _get_top_features(df_enc: pd.DataFrame, top_n: int = 5) -> list[dict]:
     # STEP 2: Attempt to locate the underlying trained model
     # -----------------------------------------------------
     try:
-        underlying_model = model._model_impl.python_model.model
-        importances = underlying_model.feature_importances_
+        importances = model.feature_importances_
     except Exception:
         importances = None
 
@@ -219,21 +236,20 @@ def _get_top_features(df_enc: pd.DataFrame, top_n: int = 5) -> list[dict]:
     # by importance to provide stronger signal to the LLM
     # -----------------------------------------------------
     if importances is not None and len(importances) == len(df_enc.columns):
+        importance_map = dict(zip(df_enc.columns, importances))
         ranked = []
 
-        for idx, (feature_name, value) in enumerate(active_features):
+        for feature_name, value in active_features:
             ranked.append(
                 {
                     "feature": feature_name,
-                    # Convert numpy types to native Python types
                     "value": value.item() if hasattr(value, "item") else value,
-                    "importance": float(importances[idx]),
+                    "importance": float(importance_map.get(feature_name, 0.0)),
                 }
             )
 
         # Sort descending by importance (highest impact first)
         ranked.sort(key=lambda x: x["importance"], reverse=True)
-
         return ranked[:top_n]
 
     # -----------------------------------------------------
@@ -248,7 +264,7 @@ def _get_top_features(df_enc: pd.DataFrame, top_n: int = 5) -> list[dict]:
         for feature_name, value in active_features[:top_n]
     ]
 
-def _llm_prediction_explanation(input_dict, proba, label, top_features):
+def llm_prediction_explanation(input_dict, proba, label, top_features):
     """
     Generate a natural-language explanation of the model prediction using an LLM.
 
@@ -285,10 +301,14 @@ def _llm_prediction_explanation(input_dict, proba, label, top_features):
 
     # === Normalize probability for readability ===
     # Extract churn probability from model output
-    try:
-        churn_prob = proba[0][1] if isinstance(proba[0], (list, tuple)) else proba
-    except Exception:
-        churn_prob = proba  # fallback if already scalar
+    if isinstance(proba, list):
+        if isinstance(proba[0], (list, tuple)):
+            churn_prob = proba[0][1]
+        else:
+            churn_prob = proba[0]
+    else:
+        churn_prob = float(proba)
+
 
     # -----------------------------------------------------
     # Prompt construction
@@ -326,11 +346,11 @@ def _llm_prediction_explanation(input_dict, proba, label, top_features):
         - Then a short summary paragraph
         """
 
-    # === Call LiteLLM (via proxy) ===
-    # Uses LITELLM_MASTER_KEY for authentication
+    # === Call LiteLLM SDK directly with OpenAI  ===
+    # Uses OPENAI_API_KEY for authentication
     response = completion(
         model="gpt-4o",
-        api_key=os.getenv("LITELLM_MASTER_KEY"),
+        api_key=os.getenv("OPENAI_API_KEY"),
         messages=[{"role": "user", "content": prompt}]
     )
 
@@ -340,7 +360,7 @@ def _llm_prediction_explanation(input_dict, proba, label, top_features):
     return explanation
 
 
-def predict(input_dict: dict) -> (str, str):
+def predict(input_dict: dict) -> tuple[str, tuple[dict, list, list[dict]]]:
     """
     Main prediction function for customer churn inference.
 
@@ -410,6 +430,7 @@ def predict(input_dict: dict) -> (str, str):
                 if hasattr(proba, "tolist"):
                     proba = proba.tolist()  # Convert numpy array to list
 
+
                 # Extract single prediction value (for single-row input)
                 if isinstance(preds, (list, tuple)) and len(preds) == 1:
                     result = preds[0]
@@ -438,19 +459,12 @@ def predict(input_dict: dict) -> (str, str):
             top_features = _get_top_features(df_enc, top_n=5)
             root_span.set_attribute("llm.top_features_count", len(top_features))
 
-            # === STEP 6: Use LLM to curate an explanation ===
-            # The LLM explains the prediction, but does not decide it.
-            explanation = _llm_prediction_explanation(
-                    input_dict=input_dict,
-                    proba=proba,
-                    label=label,
-                    top_features=top_features,
-                )
 
-            # === STEP 7: Mark the overall prediction workflow as successful ===
+            # === STEP 6: Mark the overall prediction workflow as successful ===
             # and return both the business label and the explanation.
+            # send back the remaining variables for llm call
             root_span.set_status(Status(StatusCode.OK))
-            return label, explanation
+            return label, (input_dict, proba, top_features)
 
         except Exception as e:
             root_span.record_exception(e)
