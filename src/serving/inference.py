@@ -386,26 +386,42 @@ def predict(input_dict: dict) -> tuple[str, tuple[dict, list, list[dict]]]:
     with tracer.start_as_current_span("churn_prediction") as root_span:
         try:
             # === Attach Business Attributes ===
-            root_span.set_attribute("customer.gender", input_dict.get("gender"))
-            root_span.set_attribute("customer.partner", input_dict.get("Partner"))
-            root_span.set_attribute("customer.dependents", input_dict.get("Dependents"))
-            root_span.set_attribute("customer.tenure", int(input_dict.get("tenure", 0)))
-            root_span.set_attribute("customer.monthly_charges", float(input_dict.get("MonthlyCharges", 0)))
-            root_span.set_attribute("customer.total_charges", float(input_dict.get("TotalCharges", 0)))
-            root_span.set_attribute("customer.contract", input_dict.get("Contract"))
+            # Demographics
+            root_span.set_attribute("customer.demographics.gender", input_dict.get("gender"))
+            root_span.set_attribute("customer.demographics.partner", input_dict.get("Partner"))
+            root_span.set_attribute("customer.demographics.dependents", input_dict.get("Dependents"))
+
+            # Phone services
+            root_span.set_attribute("customer.phone_services.phone_service", input_dict.get("PhoneService"))
+            root_span.set_attribute("customer.phone_services.multiple_lines", input_dict.get("MultipleLines"))
+
+            # Internet services
+            root_span.set_attribute("customer.internet_services.internet_service", input_dict.get("InternetService"))
+            root_span.set_attribute("customer.internet_services.online_security", input_dict.get("OnlineSecurity"))
+            root_span.set_attribute("customer.internet_services.online_backup", input_dict.get("OnlineBackup"))
+            root_span.set_attribute("customer.internet_services.device_protection", input_dict.get("DeviceProtection"))
+            root_span.set_attribute("customer.internet_services.tech_support", input_dict.get("TechSupport"))
+            root_span.set_attribute("customer.internet_services.streamingTV", input_dict.get("StreamingTV"))
+            root_span.set_attribute("customer.internet_services.streaming_movies", input_dict.get("StreamingMovies"))
+
+            # Account information
+            root_span.set_attribute("customer.account_info.contract", input_dict.get("Contract"))
+            root_span.set_attribute("customer.account_info.paperless_billing", input_dict.get("PaperlessBilling"))
+            root_span.set_attribute("customer.account_info.payment_method", input_dict.get("PaymentMethod"))
+
+            # Numeric information
+            root_span.set_attribute("customer.numeric.tenure", int(input_dict.get("tenure", 0)))
+            root_span.set_attribute("customer.numeric.monthly_charges", float(input_dict.get("MonthlyCharges", 0)))
+            root_span.set_attribute("customer.numeric.total_charges", float(input_dict.get("TotalCharges", 0)))
 
 
             # === STEP 1: Convert Input to DataFrame ===
             # Create single-row DataFrame for pandas transformations
             # Start a span to track this specific function
-            with tracer.start_as_current_span("dataframe_creation"):
-                df = pd.DataFrame([input_dict])
+            df = pd.DataFrame([input_dict])
 
             # === STEP 2: Apply Feature Transformations ===
-            # Start a span to track this specific function
-            with tracer.start_as_current_span("feature_transform"):
-                df_enc = _serve_transform(df)
-                root_span.set_attribute("feature.count", len(df_enc.columns))
+            df_enc = _serve_transform(df)
 
 
             # === STEP 3: Generate Model Prediction ===
@@ -431,9 +447,18 @@ def predict(input_dict: dict) -> tuple[str, tuple[dict, list, list[dict]]]:
                 else:
                     result = preds
 
+                # calculate which risk bucket the customer is in
+                risk = float(proba[0][1])
+                if risk > 0.7:
+                    bucket = "high"
+                elif risk > 0.4:
+                    bucket = "medium"
+                else:
+                    bucket = "low"
+
                 # span the raw prediction
-                model_span.set_attribute("raw_prediction", int(result))
-                model_span.set_attribute("proba", proba)
+                model_span.set_attribute("prediction.risk_bucket", bucket)
+                model_span.set_attribute("prediction.probability_churn", risk)
 
 
             # === STEP 4: Convert to Business-Friendly Output ===
@@ -444,19 +469,28 @@ def predict(input_dict: dict) -> tuple[str, tuple[dict, list, list[dict]]]:
                 label = "Not likely to churn"  # Low risk - maintain normal service
 
             # raw churn prediction and label
-            root_span.set_attribute("prediction", int(result))
             root_span.set_attribute("label", label)
 
             # === STEP 5: Build grounded context for the LLM explanation. ===
             # These are the most relevant transformed features for this row.
             # If model importances are unavailable, this falls back to active features.
             top_features = _get_top_features(df_enc, top_n=5)
-            root_span.set_attribute("llm.top_features_count", len(top_features))
+
+
+            root_span.add_event(
+                "prediction_completed",
+                {
+                    "label": label,
+                    "probability": float(proba[0][1]),
+                    "top_feature_1": top_features[0]["feature"] if top_features else "none"
+                }
+            )
 
 
             # === STEP 6: Mark the overall prediction workflow as successful ===
             # and return both the business label and the explanation.
             # send back the remaining variables for llm call
+            root_span.set_attribute("model.version", type(model).__name__)
             root_span.set_status(Status(StatusCode.OK))
             return label, (input_dict, proba, top_features)
 

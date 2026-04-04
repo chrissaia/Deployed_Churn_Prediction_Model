@@ -25,6 +25,7 @@ def train_model(df: pd.DataFrame, target_col: str, params: dict):
 
     model = XGBClassifier(**params)
 
+
     # Train model
     start_train = time.time()
     model.fit(X_train, y_train)
