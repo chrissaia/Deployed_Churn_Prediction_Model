@@ -385,34 +385,36 @@ def predict(input_dict: dict) -> tuple[str, tuple[dict, list, list[dict]]]:
     # Start a span to track the whole root function
     with tracer.start_as_current_span("churn_prediction") as root_span:
         try:
-            # === Attach Business Attributes ===
-            # Demographics
-            root_span.set_attribute("customer.demographics.gender", input_dict.get("gender"))
-            root_span.set_attribute("customer.demographics.partner", input_dict.get("Partner"))
-            root_span.set_attribute("customer.demographics.dependents", input_dict.get("Dependents"))
+            with tracer.start_as_current_span("business_data") as data_span:
+                # === Attach Business Attributes ===
 
-            # Phone services
-            root_span.set_attribute("customer.phone_services.phone_service", input_dict.get("PhoneService"))
-            root_span.set_attribute("customer.phone_services.multiple_lines", input_dict.get("MultipleLines"))
+                # Demographics
+                data_span.set_attribute("customer.demographics.gender", input_dict.get("gender"))
+                data_span.set_attribute("customer.demographics.partner", input_dict.get("Partner"))
+                data_span.set_attribute("customer.demographics.dependents", input_dict.get("Dependents"))
 
-            # Internet services
-            root_span.set_attribute("customer.internet_services.internet_service", input_dict.get("InternetService"))
-            root_span.set_attribute("customer.internet_services.online_security", input_dict.get("OnlineSecurity"))
-            root_span.set_attribute("customer.internet_services.online_backup", input_dict.get("OnlineBackup"))
-            root_span.set_attribute("customer.internet_services.device_protection", input_dict.get("DeviceProtection"))
-            root_span.set_attribute("customer.internet_services.tech_support", input_dict.get("TechSupport"))
-            root_span.set_attribute("customer.internet_services.streamingTV", input_dict.get("StreamingTV"))
-            root_span.set_attribute("customer.internet_services.streaming_movies", input_dict.get("StreamingMovies"))
+                # Phone services
+                data_span.set_attribute("customer.phone_services.phone_service", input_dict.get("PhoneService"))
+                data_span.set_attribute("customer.phone_services.multiple_lines", input_dict.get("MultipleLines"))
 
-            # Account information
-            root_span.set_attribute("customer.account_info.contract", input_dict.get("Contract"))
-            root_span.set_attribute("customer.account_info.paperless_billing", input_dict.get("PaperlessBilling"))
-            root_span.set_attribute("customer.account_info.payment_method", input_dict.get("PaymentMethod"))
+                # Internet services
+                data_span.set_attribute("customer.internet_services.internet_service", input_dict.get("InternetService"))
+                data_span.set_attribute("customer.internet_services.online_security", input_dict.get("OnlineSecurity"))
+                data_span.set_attribute("customer.internet_services.online_backup", input_dict.get("OnlineBackup"))
+                data_span.set_attribute("customer.internet_services.device_protection", input_dict.get("DeviceProtection"))
+                data_span.set_attribute("customer.internet_services.tech_support", input_dict.get("TechSupport"))
+                data_span.set_attribute("customer.internet_services.streamingTV", input_dict.get("StreamingTV"))
+                data_span.set_attribute("customer.internet_services.streaming_movies", input_dict.get("StreamingMovies"))
 
-            # Numeric information
-            root_span.set_attribute("customer.numeric.tenure", int(input_dict.get("tenure", 0)))
-            root_span.set_attribute("customer.numeric.monthly_charges", float(input_dict.get("MonthlyCharges", 0)))
-            root_span.set_attribute("customer.numeric.total_charges", float(input_dict.get("TotalCharges", 0)))
+                # Account information
+                data_span.set_attribute("customer.account_info.contract", input_dict.get("Contract"))
+                data_span.set_attribute("customer.account_info.paperless_billing", input_dict.get("PaperlessBilling"))
+                data_span.set_attribute("customer.account_info.payment_method", input_dict.get("PaymentMethod"))
+
+                # Numeric information
+                data_span.set_attribute("customer.numeric.tenure", int(input_dict.get("tenure", 0)))
+                data_span.set_attribute("customer.numeric.monthly_charges", float(input_dict.get("MonthlyCharges", 0)))
+                data_span.set_attribute("customer.numeric.total_charges", float(input_dict.get("TotalCharges", 0)))
 
 
             # === STEP 1: Convert Input to DataFrame ===
