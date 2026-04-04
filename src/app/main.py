@@ -28,7 +28,7 @@ def configure_langfuse():
         litellm.callbacks = ["langfuse_otel"]
         return {
             "langfuse_enabled": True,
-            "langfuse_host": langfuse_host,
+            "langfuse_host": langfuse_otel_host,
         }
 
     litellm.callbacks = []
@@ -57,6 +57,9 @@ app = FastAPI(
     version="0.0.1",
     lifespan=lifespan,
 )
+
+
+
 
 
 # check root health
@@ -112,6 +115,7 @@ class ChurnData(BaseModel):
     tenure: int  # Number of months with company
     MonthlyCharges: float  # Monthly charges in dollars
     TotalCharges: float  # Total charges to date
+
 
 class LLMVars(BaseModel):
     """
@@ -299,7 +303,7 @@ with gr.Blocks() as demo:
         gender, Partner, Dependents, PhoneService, MultipleLines,
         InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
         TechSupport, StreamingTV, StreamingMovies, Contract,
-        PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges
+        PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges, generate_explanation
     ):
         data = {
             "gender": gender,
@@ -397,18 +401,3 @@ app = gr.mount_gradio_app(
     demo,  # Gradio interface
     path="/ui"  # URL path where Gradio will be accessible
 )
-
-
-
-'''
-examples = [
-    # High churn risk example
-    ["Female", "No", "No", "Yes", "No", "Fiber optic", "No", "No", "No",
-     "No", "Yes", "Yes", "Month-to-month", "Yes", "Electronic check",
-     1, 85.0, 85.0],
-    # Low churn risk example
-    ["Male", "Yes", "Yes", "Yes", "Yes", "DSL", "Yes", "Yes", "Yes",
-     "Yes", "No", "No", "Two year", "No", "Credit card (automatic)",
-     60, 45.0, 2700.0]
-],
-'''
