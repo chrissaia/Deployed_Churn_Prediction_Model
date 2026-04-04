@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 import gradio as gr
 import litellm
 
-
+from src.observability.tracing import setup_tracing
 from src.serving.inference import predict, llm_prediction_explanation
 import json
 
@@ -50,6 +50,7 @@ def load_feature_columns():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    setup_tracing(app)
     app.state.feature_columns = load_feature_columns()
     app.state.observability = configure_langfuse()
     yield

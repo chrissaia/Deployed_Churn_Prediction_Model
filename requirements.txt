@@ -51,6 +51,7 @@ jsonschema-specifications==2025.4.1
 jupyter_client==8.6.3
 jupyter_core==5.8.1
 kiwisolver==1.4.8
+langfuse
 lightgbm==4.6.0
 litellm
 Mako==1.3.10
