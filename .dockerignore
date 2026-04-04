@@ -1,6 +1,11 @@
-.env
+.git
 .venv
+.idea
 __pycache__
 *.pyc
-.git
+.ipynb_checkpoints
 mlruns
+notebooks
+data
+.env
+.DS_Store
