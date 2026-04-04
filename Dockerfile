@@ -18,7 +18,7 @@ COPY . .
 COPY src/serving/model /app/src/serving/model
 # Copy MLflow run (artifacts + metadata) to the flat /app/model convenience path
 COPY src/serving/model/m-287af1f0418a4910a8c9fb9fb678b2c4/artifacts/model /app/model
-COPY src/serving/model/m-287af1f0418a4910a8c9fb9fb678b2c4/artifacts/feature_columns.txt /app/model/feature_columns.json
+COPY src/serving/model/m-287af1f0418a4910a8c9fb9fb678b2c4/artifacts/feature_columns.json /app/model/feature_columns.json
 COPY src/serving/model/m-287af1f0418a4910a8c9fb9fb678b2c4/artifacts/preprocessing.pkl /app/model/preprocessing.pkl
 
 # l
