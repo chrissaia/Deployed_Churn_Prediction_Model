@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - ci-cd
 
 permissions:
   contents: read
@@ -52,7 +51,40 @@ jobs:
           service: ${{ env.SERVICE_NAME }}
           region: ${{ env.REGION }}
           image: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          env_vars: |
+            ENVIRONMENT=prod
+          secrets: |
+            OPENAI_API_KEY=OPENAI_API_KEY:latest
 
-      - name: Smoke test
+      - name: Smoke test health
         run: |
           curl --fail "${{ steps.deploy.outputs.url }}/health"
+
+      - name: Smoke test predict
+        run: |
+          RESPONSE=$(curl --silent --show-error --fail \
+            -X POST "${{ steps.deploy.outputs.url }}/predict" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "gender": "Female",
+              "Partner": "No",
+              "Dependents": "No",
+              "PhoneService": "Yes",
+              "MultipleLines": "No",
+              "InternetService": "Fiber optic",
+              "OnlineSecurity": "No",
+              "OnlineBackup": "No",
+              "DeviceProtection": "No",
+              "TechSupport": "No",
+              "StreamingTV": "Yes",
+              "StreamingMovies": "Yes",
+              "Contract": "Month-to-month",
+              "PaperlessBilling": "Yes",
+              "PaymentMethod": "Electronic check",
+              "tenure": 1,
+              "MonthlyCharges": 85.0,
+              "TotalCharges": 85.0
+            }')
+
+          echo "$RESPONSE"
+          echo "$RESPONSE" | grep -q '"prediction"'

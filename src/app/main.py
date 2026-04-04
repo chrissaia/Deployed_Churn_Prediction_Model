@@ -1,5 +1,6 @@
+import os
 from fastapi import FastAPI
-from pydantic import RootModel, BaseModel
+from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from src.observability.tracing import setup_tracing
 import gradio as gr
@@ -10,6 +11,35 @@ from src.serving.inference import predict, llm_prediction_explanation
 import json
 
 
+def configure_langfuse():
+    """
+    Configure LiteLLM -> Langfuse tracing via environment variables.
+    Returns a small status dict for debugging.
+    """
+    langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+    langfuse_otel_host = os.getenv("LANGFUSE_BASE_URL")
+
+    configured = all([langfuse_public_key, langfuse_secret_key, langfuse_otel_host])
+
+
+    if configured:
+        # LiteLLM reads these from env
+        litellm.callbacks = ["langfuse_otel"]
+        return {
+            "langfuse_enabled": True,
+            "langfuse_host": langfuse_host,
+        }
+
+    litellm.callbacks = []
+    return {
+        "langfuse_enabled": False,
+        "langfuse_host": None,
+    }
+
+
+
+
 def load_feature_columns():
     with open("artifacts/feature_columns.json") as f:
         return json.load(f)
@@ -17,7 +47,7 @@ def load_feature_columns():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.feature_columns = load_feature_columns()
-    litellm.callbacks = ["langfuse_otel"]
+    app.state.observability = configure_langfuse()
     yield
     app.state.clear()
 
@@ -28,11 +58,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-tracer = None
 
-
-
-# check root health - Required for AWS
+# check root health
 @app.get("/")
 def root():
     return {"message": "hello"}
@@ -43,8 +70,11 @@ def health():
     return {
         "status": "ok",
         "n_features": len(app.state.feature_columns),
-        "first_3": app.state.feature_columns[:3]
-            }
+        "first_3": app.state.feature_columns[:3],
+        "langfuse_enabled": app.state.observability["langfuse_enabled"],
+        "langfuse_host": app.state.observability["langfuse_host"],
+    }
+
 
 # === REQUEST DATA SCHEMA ===
 class ChurnData(BaseModel):
@@ -83,7 +113,7 @@ class ChurnData(BaseModel):
     MonthlyCharges: float  # Monthly charges in dollars
     TotalCharges: float  # Total charges to date
 
-class llm_vars(BaseModel):
+class LLMVars(BaseModel):
     """
     llm call variables needed to execute call.
     """
@@ -95,7 +125,7 @@ class llm_vars(BaseModel):
 
 
 @app.post("/predict")
-def get_prediction(data: ChurnData, llm_data: llm_vars):
+def get_prediction(data: ChurnData):
     """
     Main prediction endpoint for customer churn prediction.
 
@@ -108,19 +138,23 @@ def get_prediction(data: ChurnData, llm_data: llm_vars):
         # Convert Pydantic model to dict and call inference pipeline
         result, vars = predict(data.model_dump())
 
-        llm_data.input_data = vars[0]
-        llm_data.proba = vars[1]
-        llm_data.result = result
-        llm_data.top_features = vars[2]
-
-        return {"prediction": result}
+        return {
+            "prediction": result,
+            "llm_context": {
+                "input_data": vars[0],
+                "proba": vars[1],
+                "result": result,
+                "top_features": vars[2],
+            }
+        }
     except Exception as e:
         # Return error details for debugging (consider logging in production)
         return {"error": str(e)}
 
 
+
 @app.post("/explain")
-def get_explanation(data: llm_vars):
+def get_explanation(data: LLMVars):
     """
     Main llm call endpoint for customer explanation.
 
@@ -132,10 +166,16 @@ def get_explanation(data: llm_vars):
     try:
         # call inference explanation function
         explanation = llm_prediction_explanation(data.input_data, data.proba, data.result, data.top_features)
-        return {"llm_call_explanation": explanation}
+        return {
+            "llm_call_explanation": explanation,
+            "llm_call_succeeded": True
+        }
     except Exception as e:
         # Return error details for debugging (consider logging in production)
-        return {"error": str(e)}
+        return {
+            "llm_call_errpr": str(e),
+            "llm_call_succeeded": False
+        }
 
 
 
@@ -236,6 +276,11 @@ with gr.Blocks() as demo:
             MonthlyCharges = gr.Number(label="Monthly Charges ($)", value=85.0)
             TotalCharges = gr.Number(label="Total Charges ($)", value=85.0)
 
+            generate_explanation = gr.Checkbox(
+                label="Generate LLM Explanation",
+                value=False
+            )
+
 
     # -------------------------
     # OUTPUTS
@@ -284,11 +329,18 @@ with gr.Blocks() as demo:
             "proba": vars[1],
             "result": result,
             "top_features": vars[2],
+            "generate_explanation": generate_explanation,
         }
 
     def gradio_explain(vars):
+        if not vars.get("generate_explanation", True):
+            return "LLM explanation skipped."
+
         explanation = llm_prediction_explanation(
-            vars["input_dict"], vars["proba"], vars["result"], vars["top_features"]
+            vars["input_dict"],
+            vars["proba"],
+            vars["result"],
+            vars["top_features"]
         )
         return explanation
 
@@ -306,13 +358,35 @@ with gr.Blocks() as demo:
             gender, Partner, Dependents, PhoneService, MultipleLines,
             InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
             TechSupport, StreamingTV, StreamingMovies, Contract,
-            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges
+            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges, generate_explanation
         ],
         outputs=[prediction_output, state]
     ).then(
         fn=gradio_explain,
         inputs=state,
         outputs=explanation_output
+    )
+
+    gr.Examples(
+        examples=[
+            [
+                "Female", "No", "No", "Yes", "No", "Fiber optic", "No", "No", "No",
+                "No", "Yes", "Yes", "Month-to-month", "Yes", "Electronic check",
+                1, 85.0, 85.0, False
+            ],
+            [
+                "Male", "Yes", "Yes", "Yes", "Yes", "DSL", "Yes", "Yes", "Yes",
+                "Yes", "No", "No", "Two year", "No", "Credit card (automatic)",
+                60, 45.0, 2700.0, True
+            ]
+        ],
+        inputs=[
+            gender, Partner, Dependents, PhoneService, MultipleLines,
+            InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
+            TechSupport, StreamingTV, StreamingMovies, Contract,
+            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges, generate_explanation
+        ],
+        label="Try example customers"
     )
 
 
