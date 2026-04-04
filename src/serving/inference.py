@@ -30,10 +30,8 @@ import mlflow
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from litellm import completion
-from langfuse import get_client
 import json
-
-
+from langfuse import Langfuse
 # -----------------------------------------------------
 # This beginning part will run when the script is imported
 # It defines the model, loads the list of feature columns and defines the BINARY_MAP and NUMERIC_COLS constants.
@@ -47,7 +45,8 @@ MODEL_DIR = "/app/model"
 
 # Initializes an OpenTelemetry tracer instance, allowing Python code to create manual spans for distributed tracing.
 tracer = trace.get_tracer(__name__)
-langfuse = get_client()
+langfuse = Langfuse()
+
 
 try:
     # Load the trained XGBoost model in MLflow pyfunc format
