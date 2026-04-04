@@ -119,7 +119,7 @@ def get_prediction(data: ChurnData, llm_data: llm_vars):
         return {"error": str(e)}
 
 
-@app.post("/explanation")
+@app.post("/explain")
 def get_explanation(data: llm_vars):
     """
     Main llm call endpoint for customer explanation.
@@ -141,100 +141,180 @@ def get_explanation(data: llm_vars):
 
 # ---------------------------------------------------
 # Gradio Web interface
-def gradio_interface(
+with gr.Blocks() as demo:
+
+    gr.Markdown("""
+    # Telco Customer Churn Predictor
+
+    Fill in the customer details below to get a churn prediction.
+    The explanation will generate after the prediction.
+    """)
+
+    # -------------------------
+    # INPUTS
+    # -------------------------
+    with gr.Row():
+        with gr.Column():
+
+            gender = gr.Dropdown(["Male", "Female"], label="Gender", value="Male")
+            Partner = gr.Dropdown(["Yes", "No"], label="Partner", value="No")
+            Dependents = gr.Dropdown(["Yes", "No"], label="Dependents", value="No")
+
+            PhoneService = gr.Dropdown(["Yes", "No"], label="Phone Service", value="Yes")
+            MultipleLines = gr.Dropdown(
+                ["Yes", "No", "No phone service"],
+                label="Multiple Lines",
+                value="No"
+            )
+
+            InternetService = gr.Dropdown(
+                ["DSL", "Fiber optic", "No"],
+                label="Internet Service",
+                value="Fiber optic"
+            )
+
+            OnlineSecurity = gr.Dropdown(
+                ["Yes", "No", "No internet service"],
+                label="Online Security",
+                value="No"
+            )
+
+            OnlineBackup = gr.Dropdown(
+                ["Yes", "No", "No internet service"],
+                label="Online Backup",
+                value="No"
+            )
+
+            DeviceProtection = gr.Dropdown(
+                ["Yes", "No", "No internet service"],
+                label="Device Protection",
+                value="No"
+            )
+
+            TechSupport = gr.Dropdown(
+                ["Yes", "No", "No internet service"],
+                label="Tech Support",
+                value="No"
+            )
+
+            StreamingTV = gr.Dropdown(
+                ["Yes", "No", "No internet service"],
+                label="Streaming TV",
+                value="Yes"
+            )
+
+            StreamingMovies = gr.Dropdown(
+                ["Yes", "No", "No internet service"],
+                label="Streaming Movies",
+                value="Yes"
+            )
+
+            Contract = gr.Dropdown(
+                ["Month-to-month", "One year", "Two year"],
+                label="Contract",
+                value="Month-to-month"
+            )
+
+            PaperlessBilling = gr.Dropdown(
+                ["Yes", "No"],
+                label="Paperless Billing",
+                value="Yes"
+            )
+
+            PaymentMethod = gr.Dropdown(
+                [
+                    "Electronic check",
+                    "Mailed check",
+                    "Bank transfer (automatic)",
+                    "Credit card (automatic)"
+                ],
+                label="Payment Method",
+                value="Electronic check"
+            )
+
+            tenure = gr.Number(label="Tenure (months)", value=1)
+            MonthlyCharges = gr.Number(label="Monthly Charges ($)", value=85.0)
+            TotalCharges = gr.Number(label="Total Charges ($)", value=85.0)
+
+
+    # -------------------------
+    # OUTPUTS
+    # -------------------------
+    prediction_output = gr.Textbox(label="Churn Prediction")
+    explanation_output = gr.Textbox(label="LLM Explanation", lines=20)
+
+    # hidden state to pass vars between steps
+    state = gr.State()
+
+
+    # -------------------------
+    # FUNCTIONS
+    # -------------------------
+    def gradio_predict(
         gender, Partner, Dependents, PhoneService, MultipleLines,
         InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
         TechSupport, StreamingTV, StreamingMovies, Contract,
         PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges
-):
-    """
-    Gradio interface function that processes form inputs and returns prediction.
+    ):
+        data = {
+            "gender": gender,
+            "Partner": Partner,
+            "Dependents": Dependents,
+            "PhoneService": PhoneService,
+            "MultipleLines": MultipleLines,
+            "InternetService": InternetService,
+            "OnlineSecurity": OnlineSecurity,
+            "OnlineBackup": OnlineBackup,
+            "DeviceProtection": DeviceProtection,
+            "TechSupport": TechSupport,
+            "StreamingTV": StreamingTV,
+            "StreamingMovies": StreamingMovies,
+            "Contract": Contract,
+            "PaperlessBilling": PaperlessBilling,
+            "PaymentMethod": PaymentMethod,
+            "tenure": int(tenure),
+            "MonthlyCharges": float(MonthlyCharges),
+            "TotalCharges": float(TotalCharges),
+        }
 
-    This function:
-    1. Takes individual form inputs from Gradio UI
-    2. Constructs the data dictionary matching the API schema
-    3. Calls the same inference pipeline used by the API
-    4. Returns user-friendly prediction string
+        result, vars = predict(data)
 
-    """
-    # matches CustomerData schema
-    data = {
-        "gender": gender,
-        "Partner": Partner,
-        "Dependents": Dependents,
-        "PhoneService": PhoneService,
-        "MultipleLines": MultipleLines,
-        "InternetService": InternetService,
-        "OnlineSecurity": OnlineSecurity,
-        "OnlineBackup": OnlineBackup,
-        "DeviceProtection": DeviceProtection,
-        "TechSupport": TechSupport,
-        "StreamingTV": StreamingTV,
-        "StreamingMovies": StreamingMovies,
-        "Contract": Contract,
-        "PaperlessBilling": PaperlessBilling,
-        "PaymentMethod": PaymentMethod,
-        "tenure": int(tenure),  # integer type
-        "MonthlyCharges": float(MonthlyCharges),  # float type
-        "TotalCharges": float(TotalCharges),  # float type
-    }
+        return str(result), {
+            "input_dict": vars[0],
+            "proba": vars[1],
+            "result": result,
+            "top_features": vars[2],
+        }
 
-    # Call same inference pipeline as API endpoint
-    result, vars = predict(data)
-    explanation = llm_prediction_explanation(vars[0], vars[1], result, vars[2])
-    return str(result), str(explanation)  # Return as string for Gradio display
+    def gradio_explain(vars):
+        explanation = llm_prediction_explanation(
+            vars["input_dict"], vars["proba"], vars["result"], vars["top_features"]
+        )
+        return explanation
 
+    # -------------------------
+    # BUTTONS
+    # -------------------------
+    predict_btn = gr.Button("Predict")
 
-# build comprehensive Gradio interface with all customer features
-demo = gr.Interface(
-    fn=gradio_interface,
-    inputs=[
-        # Demographics section
-        gr.Dropdown(["Male", "Female"], label="Gender", value="Male"),
-        gr.Dropdown(["Yes", "No"], label="Partner", value="No"),
-        gr.Dropdown(["Yes", "No"], label="Dependents", value="No"),
+    # -------------------------
+    # EVENTS
+    # -------------------------
+    predict_btn.click(
+        fn=gradio_predict,
+        inputs=[
+            gender, Partner, Dependents, PhoneService, MultipleLines,
+            InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
+            TechSupport, StreamingTV, StreamingMovies, Contract,
+            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges
+        ],
+        outputs=[prediction_output, state]
+    ).then(
+        fn=gradio_explain,
+        inputs=state,
+        outputs=explanation_output
+    )
 
-        # Phone services section
-        gr.Dropdown(["Yes", "No"], label="Phone Service", value="Yes"),
-        gr.Dropdown(["Yes", "No", "No phone service"], label="Multiple Lines", value="No"),
-
-        # Internet services section (key churn predictors)
-        gr.Dropdown(["DSL", "Fiber optic", "No"], label="Internet Service", value="Fiber optic"),
-        gr.Dropdown(["Yes", "No", "No internet service"], label="Online Security", value="No"),
-        gr.Dropdown(["Yes", "No", "No internet service"], label="Online Backup", value="No"),
-        gr.Dropdown(["Yes", "No", "No internet service"], label="Device Protection", value="No"),
-        gr.Dropdown(["Yes", "No", "No internet service"], label="Tech Support", value="No"),
-        gr.Dropdown(["Yes", "No", "No internet service"], label="Streaming TV", value="Yes"),
-        gr.Dropdown(["Yes", "No", "No internet service"], label="Streaming Movies", value="Yes"),
-
-        # Contract and billing section (major churn factors)
-        gr.Dropdown(["Month-to-month", "One year", "Two year"], label="Contract", value="Month-to-month"),
-        gr.Dropdown(["Yes", "No"], label="Paperless Billing", value="Yes"),
-        gr.Dropdown([
-            "Electronic check", "Mailed check",
-            "Bank transfer (automatic)", "Credit card (automatic)"
-        ], label="Payment Method", value="Electronic check"),
-
-        # Numeric features (important for churn prediction)
-        gr.Number(label="Tenure (months)", value=1, minimum=0, maximum=100),
-        gr.Number(label="Monthly Charges ($)", value=85.0, minimum=0, maximum=200),
-        gr.Number(label="Total Charges ($)", value=85.0, minimum=0, maximum=10000),
-    ],
-    outputs=[
-        gr.Textbox(label="Churn Prediction", lines=2),
-        gr.Textbox(label="LLM Explanation", lines=30)
-    ],
-    title="Telco Customer Churn Predictor",
-    description="""
-    **Predict customer churn probability**
-
-    Fill in the customer details below to get a churn prediction. The model uses XGBoost trained on 
-    historical telecom customer data to identify customers at risk of churning.
-    
-    """,
-    theme=gr.themes.Soft(),  # looks professional
-    allow_flagging="never"
-)
 
 # Mounting gradio onto fastapi
 # creates the /ui endpoint that serves the Gradio interface
