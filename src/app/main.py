@@ -203,8 +203,8 @@ with gr.Blocks() as demo:
             gender = gr.Dropdown(["Male", "Female"], label="Gender", value="Male")
             Partner = gr.Dropdown(["Yes", "No"], label="Partner", value="No")
             Dependents = gr.Dropdown(["Yes", "No"], label="Dependents", value="No")
-
             PhoneService = gr.Dropdown(["Yes", "No"], label="Phone Service", value="Yes")
+
             MultipleLines = gr.Dropdown(
                 ["Yes", "No", "No phone service"],
                 label="Multiple Lines",
@@ -293,7 +293,7 @@ with gr.Blocks() as demo:
     explanation_output = gr.Textbox(label="LLM Explanation", lines=20)
 
     # hidden state to pass vars between steps
-    state = gr.State()
+    state = gr.State(value={})
 
 
     # -------------------------
@@ -303,7 +303,8 @@ with gr.Blocks() as demo:
         gender, Partner, Dependents, PhoneService, MultipleLines,
         InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
         TechSupport, StreamingTV, StreamingMovies, Contract,
-        PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges, generate_explanation
+        PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges,
+        generate_explanation
     ):
         data = {
             "gender": gender,
@@ -328,23 +329,30 @@ with gr.Blocks() as demo:
 
         result, vars = predict(data)
 
-        return str(result), {
-            "input_dict": vars[0],
+        llm_context = {
+            "input_data": vars[0],
             "proba": vars[1],
             "result": result,
             "top_features": vars[2],
             "generate_explanation": generate_explanation,
         }
 
-    def gradio_explain(vars):
-        if not vars.get("generate_explanation", True):
+        initial_explanation = "Generating explanation..." if generate_explanation else "LLM explanation skipped."
+
+        return str(result), initial_explanation, llm_context
+
+    def gradio_explain(llm_context):
+        if not llm_context:
+            return "No prediction context found."
+
+        if not llm_context.get("generate_explanation", False):
             return "LLM explanation skipped."
 
         explanation = llm_prediction_explanation(
-            vars["input_dict"],
-            vars["proba"],
-            vars["result"],
-            vars["top_features"]
+            llm_context["input_data"],
+            llm_context["proba"],
+            llm_context["result"],
+            llm_context["top_features"]
         )
         return explanation
 
@@ -356,21 +364,27 @@ with gr.Blocks() as demo:
     # -------------------------
     # EVENTS
     # -------------------------
-    predict_btn.click(
+    predict_event = predict_btn.click(
         fn=gradio_predict,
         inputs=[
             gender, Partner, Dependents, PhoneService, MultipleLines,
             InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
             TechSupport, StreamingTV, StreamingMovies, Contract,
-            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges, generate_explanation
+            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges,
+            generate_explanation
         ],
-        outputs=[prediction_output, state]
-    ).then(
+        outputs=[prediction_output, explanation_output, state]
+    )
+
+    predict_event.then(
         fn=gradio_explain,
         inputs=state,
         outputs=explanation_output
     )
 
+    # -------------------------
+    # EXAMPLES
+    # -------------------------
     gr.Examples(
         examples=[
             [
@@ -390,6 +404,9 @@ with gr.Blocks() as demo:
             TechSupport, StreamingTV, StreamingMovies, Contract,
             PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges, generate_explanation
         ],
+        fn=gradio_predict,
+        outputs=[prediction_output, explanation_output, state],
+        cache_examples=False,
         label="Try example customers"
     )
 
