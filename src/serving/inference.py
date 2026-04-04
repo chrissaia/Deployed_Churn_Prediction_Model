@@ -30,6 +30,7 @@ import mlflow
 from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from litellm import completion
+from langfuse import get_client
 import json
 
 
@@ -46,7 +47,7 @@ MODEL_DIR = "/app/model"
 
 # Initializes an OpenTelemetry tracer instance, allowing Python code to create manual spans for distributed tracing.
 tracer = trace.get_tracer(__name__)
-local = False
+langfuse = get_client()
 
 try:
     # Load the trained XGBoost model in MLflow pyfunc format
@@ -76,7 +77,6 @@ except Exception as e:
 
                 MODEL_DIR = os.path.join(MODEL_DIR, "..", "artifacts")
 
-
         else:
             raise Exception("No model found in local mlruns")
     except Exception as fallback_error:
@@ -88,16 +88,10 @@ except Exception as e:
 # -----------------------------------------------------
 
 try:
-    if not local:
-        feature_file = os.path.join(MODEL_DIR, "feature_columns.txt")
-        with open(feature_file) as f:
-            FEATURE_COLS = [ln.strip() for ln in f if ln.strip()]
-        print(f"Loaded {len(FEATURE_COLS)} feature columns from serving")
-    else:
-        feature_file = os.path.join(MODEL_DIR, "feature_columns.json")
-        with open(feature_file) as f:
-            FEATURE_COLS = json.load(f)
-        print(f"Loaded {len(FEATURE_COLS)} feature columns from training")
+    feature_file = os.path.join(MODEL_DIR, "feature_columns.json")
+    with open(feature_file) as f:
+        FEATURE_COLS = json.load(f)
+    print(f"Loaded {len(FEATURE_COLS)} feature columns from training")
 except Exception as e:
     raise Exception(f"Failed to load model from {MODEL_DIR}: {e}")
 
@@ -391,82 +385,112 @@ def predict(input_dict: dict) -> tuple[str, tuple[dict, list, list[dict]]]:
         >>> predict(customer_data)
         "Likely to churn"
     """
-
+    # Start a span to track the whole root function and langfuse as well
     with tracer.start_as_current_span("churn_prediction") as root_span:
-        try:
-            # === Attach Business Attributes ===
-            root_span.set_attribute("customer.gender", input_dict.get("gender"))
-            root_span.set_attribute("customer.partner", input_dict.get("Partner"))
-            root_span.set_attribute("customer.dependents", input_dict.get("Dependents"))
-            root_span.set_attribute("customer.tenure", int(input_dict.get("tenure", 0)))
-            root_span.set_attribute("customer.monthly_charges", float(input_dict.get("MonthlyCharges", 0)))
-            root_span.set_attribute("customer.total_charges", float(input_dict.get("TotalCharges", 0)))
-            root_span.set_attribute("customer.contract", input_dict.get("Contract"))
+        with langfuse.start_as_current_observation(
+            as_type="span",
+            name="churn_prediction",
+            input=input_dict
+        ) as lf_root:
+            try:
+                # === Attach Business Attributes ===
+                root_span.set_attribute("customer.gender", input_dict.get("gender"))
+                root_span.set_attribute("customer.partner", input_dict.get("Partner"))
+                root_span.set_attribute("customer.dependents", input_dict.get("Dependents"))
+                root_span.set_attribute("customer.tenure", int(input_dict.get("tenure", 0)))
+                root_span.set_attribute("customer.monthly_charges", float(input_dict.get("MonthlyCharges", 0)))
+                root_span.set_attribute("customer.total_charges", float(input_dict.get("TotalCharges", 0)))
+                root_span.set_attribute("customer.contract", input_dict.get("Contract"))
 
 
-            # === STEP 1: Convert Input to DataFrame ===
-            # Create single-row DataFrame for pandas transformations
-            with tracer.start_as_current_span("dataframe_creation"):
-                df = pd.DataFrame([input_dict])
+                # === STEP 1: Convert Input to DataFrame ===
+                # Create single-row DataFrame for pandas transformations
+                # Start a span to track this specific function and langfuse start observation
+                with tracer.start_as_current_span("dataframe_creation"):
+                    with lf_root.start_as_current_observation(
+                        as_type="span",
+                        name="dataframe_creation"):
 
-            # === STEP 2: Apply Feature Transformations ===
-            # Start a span to track this specific function
-            with tracer.start_as_current_span("feature_transform"):
-                df_enc = _serve_transform(df)
-                root_span.set_attribute("feature.count", len(df_enc.columns))
+                        df = pd.DataFrame([input_dict])
 
-            # === STEP 3: Generate Model Prediction ===
-            # Call the loaded MLflow model for inference
-            # The model returns predictions in various formats depending on the ML library
-            # Start a span to track this specific function
-            with tracer.start_as_current_span("model_inference") as model_span:
-                preds = model.predict(df_enc)
-                proba = model.predict_proba(df_enc)
+                # === STEP 2: Apply Feature Transformations ===
+                # Start a span to track this specific function and langfuse start observation
+                with tracer.start_as_current_span("feature_transform"):
+                    with lf_root.start_as_current_observation(
+                        as_type="span",
+                        name="feature_transform"
+                    ) as lf_transform:
 
-                # Normalize prediction output to consistent format
-                if hasattr(preds, "tolist"):
-                    preds = preds.tolist()  # Convert numpy array to list
+                        df_enc = _serve_transform(df)
 
-                if hasattr(proba, "tolist"):
-                    proba = proba.tolist()  # Convert numpy array to list
+                        root_span.set_attribute("feature.count", len(df_enc.columns))
+                        lf_transform.update(output={"feature_count": len(df_enc.columns)})
 
 
-                # Extract single prediction value (for single-row input)
-                if isinstance(preds, (list, tuple)) and len(preds) == 1:
-                    result = preds[0]
+                # === STEP 3: Generate Model Prediction ===
+                # Call the loaded MLflow model for inference
+                # The model returns predictions in various formats depending on the ML library
+                # Start a span to track this specific function and langfuse start observation
+                with tracer.start_as_current_span("model_inference") as model_span:
+                    with lf_root.start_as_current_observation(
+                        as_type="span",
+                        name="model_inference"
+                    ) as lf_inference:
+
+                        preds = model.predict(df_enc)
+                        proba = model.predict_proba(df_enc)
+
+                        # Normalize prediction output to consistent format
+                        if hasattr(preds, "tolist"):
+                            preds = preds.tolist()  # Convert numpy array to list
+
+                        if hasattr(proba, "tolist"):
+                            proba = proba.tolist()  # Convert numpy array to list
+
+
+                        # Extract single prediction value (for single-row input)
+                        if isinstance(preds, (list, tuple)) and len(preds) == 1:
+                            result = preds[0]
+                        else:
+                            result = preds
+
+                        # span the raw prediction
+                        model_span.set_attribute("raw_prediction", int(result))
+                        model_span.set_attribute("proba", proba)
+
+                        lf_inference.update(output={"raw_prediction": int(result), "proba": proba})
+
+
+                # === STEP 4: Convert to Business-Friendly Output ===
+                # Convert binary prediction (0/1) to actionable business language
+                if result == 1:
+                    label = "Likely to churn"  # High risk - needs intervention
                 else:
-                    result = preds
+                    label = "Not likely to churn"  # Low risk - maintain normal service
 
-                # span the raw prediction
-                model_span.set_attribute("raw_prediction", int(result))
+                # raw churn prediction and label
+                root_span.set_attribute("prediction", int(result))
+                root_span.set_attribute("label", label)
 
+                # === STEP 5: Build grounded context for the LLM explanation. ===
+                # These are the most relevant transformed features for this row.
+                # If model importances are unavailable, this falls back to active features.
+                top_features = _get_top_features(df_enc, top_n=5)
+                root_span.set_attribute("llm.top_features_count", len(top_features))
 
-            # === STEP 4: Convert to Business-Friendly Output ===
-            # Convert binary prediction (0/1) to actionable business language
-            if result == 1:
-                label = "Likely to churn"  # High risk - needs intervention
-            else:
-                label = "Not likely to churn"  # Low risk - maintain normal service
-
-            # raw churn prediction and label
-            root_span.set_attribute("churn.prediction", int(result))
-            root_span.set_attribute("churn.label", label)
-            root_span.set_status(Status(StatusCode.OK))
-
-            # === STEP 5: Build grounded context for the LLM explanation. ===
-            # These are the most relevant transformed features for this row.
-            # If model importances are unavailable, this falls back to active features.
-            top_features = _get_top_features(df_enc, top_n=5)
-            root_span.set_attribute("llm.top_features_count", len(top_features))
+                # Langfuse root observation
+                lf_root.update(output={"prediction": label, "raw_prediction": int(result), "top_features_count": len(top_features)})
 
 
-            # === STEP 6: Mark the overall prediction workflow as successful ===
-            # and return both the business label and the explanation.
-            # send back the remaining variables for llm call
-            root_span.set_status(Status(StatusCode.OK))
-            return label, (input_dict, proba, top_features)
+                # === STEP 6: Mark the overall prediction workflow as successful ===
+                # and return both the business label and the explanation.
+                # send back the remaining variables for llm call
+                root_span.set_status(Status(StatusCode.OK))
+                return label, (input_dict, proba, top_features)
 
-        except Exception as e:
-            root_span.record_exception(e)
-            root_span.set_status(Status(StatusCode.ERROR))
-            raise
+            except Exception as e:
+                root_span.record_exception(e)
+                root_span.set_status(Status(StatusCode.ERROR))
+                # Langfuse error
+                lf_root.update(output={"error": str(e)}, level="ERROR" )
+                raise
