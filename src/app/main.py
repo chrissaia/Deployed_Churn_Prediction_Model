@@ -2,7 +2,6 @@ import os
 from fastapi import FastAPI
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
-from src.observability.tracing import setup_tracing
 import gradio as gr
 import litellm
 
@@ -18,7 +17,12 @@ def configure_langfuse():
     """
     langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
     langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
-    langfuse_otel_host = os.getenv("LANGFUSE_BASE_URL")
+    langfuse_base_url = os.getenv("LANGFUSE_BASE_URL")
+    langfuse_otel_host = os.getenv("LANGFUSE_OTEL_HOST")
+
+    if not langfuse_otel_host and langfuse_base_url:
+        os.environ["LANGFUSE_OTEL_HOST"] = langfuse_base_url
+        langfuse_otel_host = langfuse_base_url
 
     configured = all([langfuse_public_key, langfuse_secret_key, langfuse_otel_host])
 
@@ -49,7 +53,6 @@ async def lifespan(app: FastAPI):
     app.state.feature_columns = load_feature_columns()
     app.state.observability = configure_langfuse()
     yield
-    app.state.clear()
 
 app = FastAPI(
     title="Telco Churn Model",
@@ -177,7 +180,7 @@ def get_explanation(data: LLMVars):
     except Exception as e:
         # Return error details for debugging (consider logging in production)
         return {
-            "llm_call_errpr": str(e),
+            "llm_call_error": str(e),
             "llm_call_succeeded": False
         }
 
@@ -383,31 +386,47 @@ with gr.Blocks() as demo:
     )
 
     # -------------------------
-    # EXAMPLES
+    # EXAMPLE LOADERS
     # -------------------------
-    gr.Examples(
-        examples=[
-            [
-                "Female", "No", "No", "Yes", "No", "Fiber optic", "No", "No", "No",
-                "No", "Yes", "Yes", "Month-to-month", "Yes", "Electronic check",
-                1, 85.0, 85.0, False
-            ],
-            [
-                "Male", "Yes", "Yes", "Yes", "Yes", "DSL", "Yes", "Yes", "Yes",
-                "Yes", "No", "No", "Two year", "No", "Credit card (automatic)",
-                60, 45.0, 2700.0, True
-            ]
-        ],
-        inputs=[
+    load_high_risk_btn = gr.Button("Load High-Risk Example")
+    load_low_risk_btn = gr.Button("Load Low-Risk Example")
+
+    def load_high_risk_example():
+        return [
+            "Female", "No", "No", "Yes", "No", "Fiber optic", "No", "No", "No",
+            "No", "Yes", "Yes", "Month-to-month", "Yes", "Electronic check",
+            1, 85.0, 85.0, False
+        ]
+
+    def load_low_risk_example():
+        return [
+            "Male", "Yes", "Yes", "Yes", "Yes", "DSL", "Yes", "Yes", "Yes",
+            "Yes", "No", "No", "Two year", "No", "Credit card (automatic)",
+            60, 45.0, 2700.0, True
+        ]
+
+    load_high_risk_btn.click(
+        fn=load_high_risk_example,
+        inputs=[],
+        outputs=[
             gender, Partner, Dependents, PhoneService, MultipleLines,
             InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
             TechSupport, StreamingTV, StreamingMovies, Contract,
-            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges, generate_explanation
-        ],
-        fn=gradio_predict,
-        outputs=[prediction_output, explanation_output, state],
-        cache_examples=False,
-        label="Try example customers"
+            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges,
+            generate_explanation
+        ]
+    )
+
+    load_low_risk_btn.click(
+        fn=load_low_risk_example,
+        inputs=[],
+        outputs=[
+            gender, Partner, Dependents, PhoneService, MultipleLines,
+            InternetService, OnlineSecurity, OnlineBackup, DeviceProtection,
+            TechSupport, StreamingTV, StreamingMovies, Contract,
+            PaperlessBilling, PaymentMethod, tenure, MonthlyCharges, TotalCharges,
+            generate_explanation
+        ]
     )
 
 
