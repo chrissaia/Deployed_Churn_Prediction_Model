@@ -3,11 +3,12 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install the application dependencies
-COPY requirements.txt .
+COPY requirements-prod.txt .
 
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r requirements-prod.txt \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 
 
 # tells the builder to copy all files from the host and put them into the container imagw

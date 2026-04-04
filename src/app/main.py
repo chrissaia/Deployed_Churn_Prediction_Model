@@ -15,24 +15,19 @@ def configure_langfuse():
     Configure LiteLLM -> Langfuse tracing via environment variables.
     Returns a small status dict for debugging.
     """
-    langfuse_public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
-    langfuse_secret_key = os.getenv("LANGFUSE_SECRET_KEY")
-    langfuse_base_url = os.getenv("LANGFUSE_BASE_URL")
-    langfuse_otel_host = os.getenv("LANGFUSE_OTEL_HOST")
+    public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+    secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+    host = os.getenv("LANGFUSE_OTEL_HOST") or os.getenv("LANGFUSE_BASE_URL")
 
-    if not langfuse_otel_host and langfuse_base_url:
-        os.environ["LANGFUSE_OTEL_HOST"] = langfuse_base_url
-        langfuse_otel_host = langfuse_base_url
-
-    configured = all([langfuse_public_key, langfuse_secret_key, langfuse_otel_host])
-
+    configured = all([public_key, secret_key])
 
     if configured:
-        # LiteLLM reads these from env
+        if host:
+            os.environ["LANGFUSE_OTEL_HOST"] = host
         litellm.callbacks = ["langfuse_otel"]
         return {
             "langfuse_enabled": True,
-            "langfuse_host": langfuse_otel_host,
+            "langfuse_host": os.getenv("LANGFUSE_OTEL_HOST"),
         }
 
     litellm.callbacks = []
@@ -52,7 +47,6 @@ def load_feature_columns():
 async def lifespan(app: FastAPI):
     setup_tracing(app)
     app.state.feature_columns = load_feature_columns()
-    app.state.observability = configure_langfuse()
     yield
 
 app = FastAPI(
@@ -78,8 +72,6 @@ def health():
         "status": "ok",
         "n_features": len(app.state.feature_columns),
         "first_3": app.state.feature_columns[:3],
-        "langfuse_enabled": app.state.observability["langfuse_enabled"],
-        "langfuse_host": app.state.observability["langfuse_host"],
     }
 
 
