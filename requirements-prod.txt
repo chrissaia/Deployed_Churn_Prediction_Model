@@ -9,6 +9,7 @@ numpy==1.26.4
 scikit-learn==1.5.2
 xgboost==3.0.3
 mlflow==2.14.1
+protobuf==4.25.8
 
 litellm==1.40.0
 openai==1.30.5

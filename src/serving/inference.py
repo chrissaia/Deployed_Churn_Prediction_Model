@@ -58,7 +58,10 @@ except Exception as e:
         # Try loading from local MLflow tracking
         import glob
 
-        local_model_paths = glob.glob("./mlruns/*/*/artifacts/model")
+        local_model_paths = (
+                glob.glob("./mlruns/*/*/artifacts/model")
+                + glob.glob("./src/serving/model/*/artifacts/model")
+        )
         if local_model_paths:
             local = True
             for local_model_path in local_model_paths:
@@ -69,10 +72,8 @@ except Exception as e:
                     local_model_paths.remove(latest_model)
                     continue
 
-                MODEL_DIR = latest_model
+                MODEL_DIR = os.path.join(latest_model, "..")
                 print(f"Fallback: Loaded model from {latest_model}")
-
-                MODEL_DIR = os.path.join(MODEL_DIR, "..", "artifacts")
 
         else:
             raise Exception("No model found in local mlruns")
