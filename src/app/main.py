@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 import gradio as gr
@@ -14,6 +14,8 @@ def configure_langfuse():
     """
     Configure LiteLLM -> Langfuse tracing via environment variables.
     Returns a small status dict for debugging.
+
+    NOT IN USE AS OF NOW
     """
     public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
     secret_key = os.getenv("LANGFUSE_SECRET_KEY")
@@ -37,11 +39,16 @@ def configure_langfuse():
     }
 
 
-
-
 def load_feature_columns():
-    with open("artifacts/feature_columns.json") as f:
-        return json.load(f)
+    try:
+        with open("app/model/feature_columns.json") as f:
+            return json.load(f)
+
+    except Exception as e:
+        with open("artifacts/feature_columns.json") as f:
+            return json.load(f)
+
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -149,7 +156,7 @@ def get_prediction(data: ChurnData):
         }
     except Exception as e:
         # Return error details for debugging (consider logging in production)
-        return {"error": str(e)}
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 
@@ -172,10 +179,7 @@ def get_explanation(data: LLMVars):
         }
     except Exception as e:
         # Return error details for debugging (consider logging in production)
-        return {
-            "llm_call_error": str(e),
-            "llm_call_succeeded": False
-        }
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 

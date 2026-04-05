@@ -72,6 +72,7 @@ opentelemetry-instrumentation-requests
 opentelemetry-exporter-gcp-trace
 optuna==4.4.0
 pandas==2.1.4
+pandera==0.26.1
 parso==0.8.4
 patsy==1.0.1
 pexpect==4.9.0

@@ -4,4 +4,4 @@ build_dependencies:
 - setuptools==82.0.0
 - wheel
 dependencies:
-- -r requirements.txt
+- -r requirements-dev.txt
