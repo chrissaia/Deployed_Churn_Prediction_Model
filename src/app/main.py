@@ -185,7 +185,7 @@ def get_explanation(data: LLMVars):
 
 # ---------------------------------------------------
 # Gradio Web interface
-with gr.Blocks() as demo:
+with gr.Blocks(theme=gr.themes.Ocean()) as demo:
 
     gr.Markdown("""
     # Telco Customer Churn Predictor
