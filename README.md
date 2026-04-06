@@ -275,11 +275,11 @@ Steps:
 
 ....
 
-```
 
 ## Other Tips
 
 ### Creating similar folder structure
+
 ```
 mkdir -p \
 	data/raw data/processed data/external \
@@ -297,6 +297,7 @@ mkdir -p \
 ```
 
 ### Basic ML imports 
+
 ```commandline
 cat > requirements.txt << 'EOF'
 pandas
